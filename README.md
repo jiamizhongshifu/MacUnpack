@@ -16,8 +16,8 @@ It can be used as a drag-and-drop macOS app or as a Python command-line tool.
   - `name.r00`, `name.r01`, `name.rar`
 - Recursively extract nested archives, including files with misleading extensions such as `.tmp` when their content is actually a 7z archive
 - Detect obvious fake archive extensions, such as an MP4 file renamed to `.zip` or `.7z`, and create a usable `.mp4` copy instead of failing the run
-- Join raw MP4 byte streams that are split and disguised as archive volumes, such as `video.7z.001` plus `video.7z.002`
-- Validate raw MP4 split joins and report when later volumes are not referenced by the MP4 index
+- Try to join raw MP4 byte streams that are split and disguised as archive volumes, such as `video.7z.001` plus `video.7z.002`
+- Validate raw MP4 split joins before writing the final `.mp4`; if later volumes are not referenced by the MP4 index, MacUnpack reports the issue and removes the temporary output
 - Automatically create a QuickTime-compatible copy for `HEVC/hev1` MP4 files:
   - output name: `*_quicktime.mp4`
   - no re-encoding
@@ -91,6 +91,7 @@ dist/MacUnpack.zip
 - If a volume number is missing, MacUnpack fails early.
 - Recursive extraction is enabled by default in `MacUnpack.app`; for CLI usage add `--recursive`.
 - MP4 QuickTime compatibility remuxing is enabled by default. Use `--no-fix-mp4` to skip it.
+- Raw MP4 files disguised as split archives are only recoverable when the MP4 index references bytes from later volumes. If the index only points into the first volume, MacUnpack cannot create a valid combined MP4 from those files.
 
 ## License
 

@@ -83,6 +83,7 @@ def main() -> int:
             print(f"[done]    {out_dir}\n")
         except Exception as exc:
             status = EXIT_PARTIAL if len(args.paths) > 1 else EXIT_ERROR
+            sys.stdout.flush()
             print(f"[error]   {source}: {exc}\n", file=sys.stderr)
             if out_dir and not args.keep_failed and not args.output:
                 shutil.rmtree(out_dir, ignore_errors=True)
@@ -479,31 +480,33 @@ def handle_misnamed_mp4(source: Path, explicit_output: str | None, fix_mp4: bool
     split = collect_raw_media_split(source)
     output_dir = Path(explicit_output).expanduser().resolve() if explicit_output else source.parent
     output_dir.mkdir(parents=True, exist_ok=True)
-    source_for_size = split[0] if split else source
-    total_size = sum(path.stat().st_size for path in split) if split else source.stat().st_size
-    mp4_path = reusable_or_unique_media_path(
-        output_dir / f"{media_base_name(source_for_size)}.mp4",
-        source_for_size,
-        total_size,
-    )
 
-    if mp4_path.exists():
-        if mp4_path.stat().st_size == total_size:
-            print(f"[media]   existing MP4 copy found: {mp4_path}")
-        else:
-            print(f"[media]   replacing incomplete MP4 copy: {mp4_path}")
-            write_media_output(mp4_path, split or (source,))
+    if split:
+        total_size = sum(path.stat().st_size for path in split)
+        mp4_path = reusable_or_unique_media_path(
+            output_dir / f"{media_base_name(split[0])}.mp4",
+            split[0],
+            total_size,
+        )
+        print("[media]   archive-like volumes contain raw MP4 bytes, not a 7z archive")
+        print(f"[media]   validating {len(split)} volumes before creating: {mp4_path}")
+        join_and_validate_raw_media_split(mp4_path, split)
     else:
-        if split:
-            print("[media]   archive-like volumes contain raw MP4 bytes, not a 7z archive")
-            print(f"[media]   joining {len(split)} volumes into: {mp4_path}")
+        mp4_path = reusable_or_unique_media_path(
+            output_dir / f"{media_base_name(source)}.mp4",
+            source,
+            source.stat().st_size,
+        )
+        if mp4_path.exists():
+            if mp4_path.stat().st_size == source.stat().st_size:
+                print(f"[media]   existing MP4 copy found: {mp4_path}")
+            else:
+                print(f"[media]   replacing incomplete MP4 copy: {mp4_path}")
+                write_media_output(mp4_path, (source,))
         else:
             print("[media]   file extension looks like an archive, but content is MP4 video")
             print(f"[media]   creating MP4 copy: {mp4_path}")
-        write_media_output(mp4_path, split or (source,))
-
-    if split:
-        validate_raw_media_split_output(mp4_path, split)
+            write_media_output(mp4_path, (source,))
 
     if not fix_mp4:
         return
@@ -544,6 +547,38 @@ def write_media_output(destination: Path, parts: tuple[Path, ...]) -> None:
             with part.open("rb") as reader:
                 shutil.copyfileobj(reader, writer)
     tmp.replace(destination)
+
+
+def join_and_validate_raw_media_split(destination: Path, parts: tuple[Path, ...]) -> None:
+    candidate = destination.with_name(f".{destination.name}.joining")
+    if candidate.exists():
+        candidate.unlink()
+    try:
+        write_media_output(candidate, parts)
+        validate_raw_media_split_output(candidate, parts)
+    except Exception:
+        if candidate.exists():
+            candidate.unlink()
+        remove_invalid_generated_mp4(destination, parts)
+        raise
+    candidate.replace(destination)
+
+
+def remove_invalid_generated_mp4(destination: Path, parts: tuple[Path, ...]) -> None:
+    if not destination.exists():
+        return
+    try:
+        existing_size = destination.stat().st_size
+        generated_sizes = {parts[0].stat().st_size, sum(part.stat().st_size for part in parts)}
+    except OSError:
+        return
+    if existing_size not in generated_sizes:
+        return
+    try:
+        destination.unlink()
+        print(f"[media]   removed invalid generated MP4: {destination}")
+    except OSError:
+        pass
 
 
 def validate_raw_media_split_output(output: Path, parts: tuple[Path, ...]) -> None:
