@@ -502,6 +502,9 @@ def handle_misnamed_mp4(source: Path, explicit_output: str | None, fix_mp4: bool
             print(f"[media]   creating MP4 copy: {mp4_path}")
         write_media_output(mp4_path, split or (source,))
 
+    if split:
+        validate_raw_media_split_output(mp4_path, split)
+
     if not fix_mp4:
         return
 
@@ -541,6 +544,52 @@ def write_media_output(destination: Path, parts: tuple[Path, ...]) -> None:
             with part.open("rb") as reader:
                 shutil.copyfileobj(reader, writer)
     tmp.replace(destination)
+
+
+def validate_raw_media_split_output(output: Path, parts: tuple[Path, ...]) -> None:
+    ffprobe = first_available(("ffprobe",))
+    if not ffprobe or len(parts) <= 1:
+        return
+
+    part2_start = parts[0].stat().st_size
+    max_referenced = max_media_packet_end(output, ffprobe)
+    if max_referenced is None:
+        return
+    if max_referenced < part2_start:
+        raise UserError(
+            "joined raw MP4 volumes, but the MP4 index does not reference data from later volumes. "
+            "The extra volume bytes are not part of the playable media stream, so a valid combined MP4 "
+            "cannot be produced automatically from these files."
+        )
+
+
+def max_media_packet_end(source: Path, ffprobe: str) -> int | None:
+    cmd = [
+        ffprobe,
+        "-v",
+        "error",
+        "-show_entries",
+        "packet=pos,size",
+        "-of",
+        "csv=p=0",
+        str(source),
+    ]
+    result = subprocess.run(cmd, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    if result.returncode != 0:
+        return None
+
+    max_end = 0
+    for line in result.stdout.splitlines():
+        fields = [field.strip() for field in line.split(",") if field.strip()]
+        if len(fields) < 2:
+            continue
+        try:
+            pos = int(fields[0])
+            size = int(fields[1])
+        except ValueError:
+            continue
+        max_end = max(max_end, pos + size)
+    return max_end or None
 
 
 def media_base_name(source: Path) -> str:

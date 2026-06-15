@@ -17,6 +17,7 @@ It can be used as a drag-and-drop macOS app or as a Python command-line tool.
 - Recursively extract nested archives, including files with misleading extensions such as `.tmp` when their content is actually a 7z archive
 - Detect obvious fake archive extensions, such as an MP4 file renamed to `.zip` or `.7z`, and create a usable `.mp4` copy instead of failing the run
 - Join raw MP4 byte streams that are split and disguised as archive volumes, such as `video.7z.001` plus `video.7z.002`
+- Validate raw MP4 split joins and report when later volumes are not referenced by the MP4 index
 - Automatically create a QuickTime-compatible copy for `HEVC/hev1` MP4 files:
   - output name: `*_quicktime.mp4`
   - no re-encoding
