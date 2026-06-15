@@ -15,7 +15,7 @@ It can be used as a drag-and-drop macOS app or as a Python command-line tool.
   - `name.part1.rar`, `name.part2.rar`
   - `name.r00`, `name.r01`, `name.rar`
 - Recursively extract nested archives, including files with misleading extensions such as `.tmp` when their content is actually a 7z archive
-- Detect obvious fake archive extensions, such as an MP4 file renamed to `.7z`
+- Detect obvious fake archive extensions, such as an MP4 file renamed to `.zip` or `.7z`, and create a usable `.mp4` copy instead of failing the run
 - Automatically create a QuickTime-compatible copy for `HEVC/hev1` MP4 files:
   - output name: `*_quicktime.mp4`
   - no re-encoding

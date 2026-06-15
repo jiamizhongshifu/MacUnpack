@@ -63,6 +63,10 @@ def main() -> int:
         source = Path(raw_path).expanduser().resolve()
         out_dir: Path | None = None
         try:
+            if is_archive_like_name(source) and is_mp4_content(source):
+                handle_misnamed_mp4(source, args.output, args.fix_mp4)
+                print("")
+                continue
             plan = build_plan(source)
             preflight_backend(plan)
             for warning in plan.warnings:
@@ -151,8 +155,24 @@ def detect_obvious_mismatch(source: Path) -> str | None:
     except OSError:
         return None
 
-    lower = source.name.lower()
-    archive_like = lower.endswith(
+    if not is_archive_like_name(source):
+        return None
+
+    if is_mp4_header(header):
+        return (
+            "file extension looks like an archive, but the file content is an MP4 video. "
+            "Rename it to .mp4; it does not need extraction."
+        )
+    if header.startswith(b"<!DOCTYPE html") or header.startswith(b"<html") or b"<html" in header[:32].lower():
+        return (
+            "file extension looks like an archive, but the file content is HTML. "
+            "This is likely a downloaded web page, not the real archive."
+        )
+    return None
+
+
+def is_archive_like_name(source: Path) -> bool:
+    return source.name.lower().endswith(
         (
             ".7z",
             ".7z.001",
@@ -167,20 +187,18 @@ def detect_obvious_mismatch(source: Path) -> str | None:
             ".txz",
         )
     )
-    if not archive_like:
-        return None
 
-    if len(header) >= 12 and header[4:8] == b"ftyp":
-        return (
-            "file extension looks like an archive, but the file content is an MP4 video. "
-            "Rename it to .mp4; it does not need extraction."
-        )
-    if header.startswith(b"<!DOCTYPE html") or header.startswith(b"<html") or b"<html" in header[:32].lower():
-        return (
-            "file extension looks like an archive, but the file content is HTML. "
-            "This is likely a downloaded web page, not the real archive."
-        )
-    return None
+
+def is_mp4_header(header: bytes) -> bool:
+    return len(header) >= 12 and header[4:8] == b"ftyp"
+
+
+def is_mp4_content(source: Path) -> bool:
+    try:
+        with source.open("rb") as handle:
+            return is_mp4_header(handle.read(16))
+    except OSError:
+        return False
 
 
 def detect_archive_magic(source: Path) -> tuple[str, str] | None:
@@ -452,6 +470,75 @@ def looks_like_nested_archive(source: Path) -> bool:
     if lower.endswith((".7z", ".rar", ".zip", ".tar", ".tar.gz", ".tgz", ".gz", ".bz2", ".xz")):
         return True
     return detect_archive_magic(source) is not None
+
+
+def handle_misnamed_mp4(source: Path, explicit_output: str | None, fix_mp4: bool) -> None:
+    if not source.exists():
+        raise UserError("file does not exist")
+
+    output_dir = Path(explicit_output).expanduser().resolve() if explicit_output else source.parent
+    output_dir.mkdir(parents=True, exist_ok=True)
+    mp4_path = reusable_or_unique_file_path(output_dir / f"{media_base_name(source)}.mp4", source)
+
+    if mp4_path.exists():
+        print(f"[media]   existing MP4 copy found: {mp4_path}")
+    else:
+        print("[media]   file extension looks like an archive, but content is MP4 video")
+        print(f"[media]   creating MP4 copy: {mp4_path}")
+        shutil.copy2(source, mp4_path)
+
+    if not fix_mp4:
+        return
+
+    ffprobe = first_available(("ffprobe",))
+    ffmpeg = first_available(("ffmpeg",))
+    if not ffprobe or not ffmpeg:
+        print("[warn]    ffmpeg/ffprobe not found; skipped automatic MP4 compatibility fix")
+        return
+    if needs_quicktime_hevc_fix(mp4_path, ffprobe):
+        quicktime_path = mp4_path.with_name(f"{mp4_path.stem}_quicktime{mp4_path.suffix}")
+        if quicktime_path.exists():
+            print(f"[mp4]     QuickTime-compatible file already exists: {quicktime_path}")
+            return
+        print(f"[mp4]     creating QuickTime-compatible copy: {quicktime_path}")
+        remux_for_quicktime(mp4_path, quicktime_path, ffmpeg)
+
+
+def media_base_name(source: Path) -> str:
+    name = source.name
+    lower = name.lower()
+    for suffix in (
+        ".7z.001",
+        ".zip.001",
+        ".tar.gz",
+        ".tar.bz2",
+        ".tar.xz",
+        ".zip",
+        ".7z",
+        ".rar",
+        ".tgz",
+        ".tbz2",
+        ".txz",
+        ".tar",
+    ):
+        if lower.endswith(suffix):
+            return name[: -len(suffix)]
+    return source.stem
+
+
+def reusable_or_unique_file_path(path: Path, source: Path) -> Path:
+    if not path.exists():
+        return path
+    try:
+        if path.stat().st_size == source.stat().st_size:
+            return path
+    except OSError:
+        pass
+    for index in range(2, 1000):
+        candidate = path.with_name(f"{path.stem}-{index}{path.suffix}")
+        if not candidate.exists():
+            return candidate
+    raise UserError(f"could not find available output file near: {path}")
 
 
 def fix_quicktime_mp4s(root: Path) -> None:
