@@ -476,16 +476,31 @@ def handle_misnamed_mp4(source: Path, explicit_output: str | None, fix_mp4: bool
     if not source.exists():
         raise UserError("file does not exist")
 
+    split = collect_raw_media_split(source)
     output_dir = Path(explicit_output).expanduser().resolve() if explicit_output else source.parent
     output_dir.mkdir(parents=True, exist_ok=True)
-    mp4_path = reusable_or_unique_file_path(output_dir / f"{media_base_name(source)}.mp4", source)
+    source_for_size = split[0] if split else source
+    total_size = sum(path.stat().st_size for path in split) if split else source.stat().st_size
+    mp4_path = reusable_or_unique_media_path(
+        output_dir / f"{media_base_name(source_for_size)}.mp4",
+        source_for_size,
+        total_size,
+    )
 
     if mp4_path.exists():
-        print(f"[media]   existing MP4 copy found: {mp4_path}")
+        if mp4_path.stat().st_size == total_size:
+            print(f"[media]   existing MP4 copy found: {mp4_path}")
+        else:
+            print(f"[media]   replacing incomplete MP4 copy: {mp4_path}")
+            write_media_output(mp4_path, split or (source,))
     else:
-        print("[media]   file extension looks like an archive, but content is MP4 video")
-        print(f"[media]   creating MP4 copy: {mp4_path}")
-        shutil.copy2(source, mp4_path)
+        if split:
+            print("[media]   archive-like volumes contain raw MP4 bytes, not a 7z archive")
+            print(f"[media]   joining {len(split)} volumes into: {mp4_path}")
+        else:
+            print("[media]   file extension looks like an archive, but content is MP4 video")
+            print(f"[media]   creating MP4 copy: {mp4_path}")
+        write_media_output(mp4_path, split or (source,))
 
     if not fix_mp4:
         return
@@ -502,6 +517,30 @@ def handle_misnamed_mp4(source: Path, explicit_output: str | None, fix_mp4: bool
             return
         print(f"[mp4]     creating QuickTime-compatible copy: {quicktime_path}")
         remux_for_quicktime(mp4_path, quicktime_path, ffmpeg)
+
+
+def collect_raw_media_split(source: Path) -> tuple[Path, ...]:
+    match = re.match(r"^(?P<base>.+\.(?:7z|zip))\.(?P<num>\d{3})$", source.name, re.I)
+    if not match:
+        return ()
+
+    first = source.parent / f"{match.group('base')}.001"
+    if not first.exists() or not is_mp4_content(first):
+        return ()
+
+    volumes, _warnings = collect_numeric_volumes(source.parent, match.group("base"), 3)
+    if len(volumes) <= 1:
+        return ()
+    return volumes
+
+
+def write_media_output(destination: Path, parts: tuple[Path, ...]) -> None:
+    tmp = destination.with_name(f".{destination.name}.tmp")
+    with tmp.open("wb") as writer:
+        for part in parts:
+            with part.open("rb") as reader:
+                shutil.copyfileobj(reader, writer)
+    tmp.replace(destination)
 
 
 def media_base_name(source: Path) -> str:
@@ -526,11 +565,12 @@ def media_base_name(source: Path) -> str:
     return source.stem
 
 
-def reusable_or_unique_file_path(path: Path, source: Path) -> Path:
+def reusable_or_unique_media_path(path: Path, source: Path, expected_size: int) -> Path:
     if not path.exists():
         return path
     try:
-        if path.stat().st_size == source.stat().st_size:
+        existing_size = path.stat().st_size
+        if existing_size == expected_size or existing_size == source.stat().st_size:
             return path
     except OSError:
         pass
